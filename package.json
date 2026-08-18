@@ -1,0 +1,20 @@
+{
+  "name": "realtor-lights-bookkeeping-scraper",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Railway scraper for Nextdoor realtor FSBO, outdoor lighting, and bookkeeping leads",
+  "main": "checkCoreDownload.js",
+  "scripts": {
+    "start": "node checkCoreDownload.js",
+    "scrape": "node index.js",
+    "railway": "node runRailway.js",
+    "check": "node --check checkCoreDownload.js && node --check runRailway.js && node --check index.js && node --check db/db.js && node --check normalizeCity.js"  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "pg": "^8.13.1",
+    "playwright-core": "^1.54.0"
+  }
+}
