@@ -383,37 +383,71 @@ async function getCurrentNextdoorPage(context) {
     );
 }
 
-async function waitForNextdoorReady(context, totalMs = 180_000) {
+async function waitForNextdoorReady(
+    context,
+    totalMs = 180_000,
+) {
     console.log(
-        "⏳ Waiting for the Multilogin profile and Nextdoor feed to finish loading...",
+        "⏳ Waiting for the Multilogin profile and Nextdoor to finish loading...",
     );
 
     const deadline = Date.now() + totalMs;
+
     let page = null;
     let forcedFeedNavigation = false;
+    let forcedReload = false;
+    let hydratingStartedAt = null;
 
-    await sleep(5_000);
+    await sleep(7_000);
 
     while (Date.now() < deadline) {
+        const remaining = Math.max(
+            0,
+            Math.round((deadline - Date.now()) / 1000),
+        );
+
         page = await getCurrentNextdoorPage(context);
 
         if (!page || page.isClosed()) {
+            console.log(
+                `   ⏱ No usable page yet. ${remaining}s remaining...`,
+            );
+
             await sleep(2_500);
             continue;
         }
 
         const url = page.url();
-        const isNextdoor = /(^https?:\/\/)?([^/]+\.)?nextdoor\.com/i.test(url);
+
+        console.log(
+            `   ⏱ ${remaining}s remaining | ${url}`,
+        );
+
+        const isNextdoor =
+            /(^https?:\/\/)?([^/]+\.)?nextdoor\.com/i.test(url);
 
         if (!isNextdoor) {
             if (!forcedFeedNavigation) {
                 forcedFeedNavigation = true;
+
+                console.log(
+                    "🧭 Current page is not Nextdoor. Opening news feed...",
+                );
+
                 await page
-                    .goto("https://nextdoor.com/news_feed/", {
-                        waitUntil: "domcontentloaded",
-                        timeout: 60_000,
-                    })
-                    .catch(() => {});
+                    .goto(
+                        "https://nextdoor.com/news_feed/",
+                        {
+                            waitUntil: "domcontentloaded",
+                            timeout: 60_000,
+                        },
+                    )
+                    .catch((error) => {
+                        console.log(
+                            `ℹ️ Feed navigation still settling: ${error.message}`,
+                        );
+                    });
+
                 await sleep(5_000);
                 continue;
             }
@@ -423,39 +457,164 @@ async function waitForNextdoorReady(context, totalMs = 180_000) {
         }
 
         const isLoginOrInterstitial =
-            /\/(login|verify|choose_address|checkpoint)/i.test(url);
+            /\/(login|verify|choose_address|checkpoint)/i.test(
+                url,
+            );
 
         if (isLoginOrInterstitial) {
-            console.log(`ℹ️ Waiting on Nextdoor login/interstitial: ${url}`);
+            console.log(
+                `ℹ️ Waiting on Nextdoor login/interstitial: ${url}`,
+            );
+
+            hydratingStartedAt = null;
+
             await sleep(2_500);
             continue;
         }
 
-        const searchBox = await findVisibleSearchBox(page);
+        // ---------------------------------------------------------
+        // NORMAL POSTS SEARCH READY
+        // ---------------------------------------------------------
+
+        const searchBox =
+            await findVisibleSearchBox(page);
 
         if (searchBox) {
-            console.log(`✅ Nextdoor is ready: ${url}`);
+            console.log(
+                `✅ Nextdoor is ready — search box found: ${url}`,
+            );
+
             return page;
         }
 
-        if (!forcedFeedNavigation) {
+        // ---------------------------------------------------------
+        // REALTOR MARKETPLACE READY
+        // ---------------------------------------------------------
+
+        const forSaleAndFree =
+            await firstVisible([
+                page.getByText(
+                    "For Sale & Free",
+                    { exact: true },
+                ),
+
+                page.locator(
+                    'span[data-block="33"]',
+                    {
+                        hasText:
+                            "For Sale & Free",
+                    },
+                ),
+
+                page.getByRole(
+                    "link",
+                    {
+                        name:
+                            /For Sale & Free/i,
+                    },
+                ),
+
+                page.getByRole(
+                    "button",
+                    {
+                        name:
+                            /For Sale & Free/i,
+                    },
+                ),
+
+                page.locator(
+                    'text="For Sale & Free"',
+                ),
+            ]);
+
+        if (forSaleAndFree) {
+            console.log(
+                `✅ Nextdoor is ready — For Sale & Free found: ${url}`,
+            );
+
+            return page;
+        }
+
+        // ---------------------------------------------------------
+        // PAGE APPEARS OPEN BUT STILL HYDRATING
+        // ---------------------------------------------------------
+
+        if (!hydratingStartedAt) {
+            hydratingStartedAt = Date.now();
+        }
+
+        const hydratingForMs =
+            Date.now() - hydratingStartedAt;
+
+        if (
+            !forcedFeedNavigation &&
+            hydratingForMs >= 15_000
+        ) {
             forcedFeedNavigation = true;
+
+            console.log(
+                "🧭 Nextdoor is open but not ready. Opening a clean news feed...",
+            );
+
             await page
-                .goto("https://nextdoor.com/news_feed/", {
+                .goto(
+                    "https://nextdoor.com/news_feed/",
+                    {
+                        waitUntil: "domcontentloaded",
+                        timeout: 60_000,
+                    },
+                )
+                .catch((error) => {
+                    console.log(
+                        `ℹ️ Forced navigation still settling: ${error.message}`,
+                    );
+                });
+
+            hydratingStartedAt = Date.now();
+
+            await sleep(7_000);
+            continue;
+        }
+
+        // ---------------------------------------------------------
+        // CLEAN FEED STILL DIDN'T HYDRATE — RELOAD ONCE
+        // ---------------------------------------------------------
+
+        if (
+            forcedFeedNavigation &&
+            !forcedReload &&
+            hydratingForMs >= 45_000
+        ) {
+            forcedReload = true;
+
+            console.log(
+                "🔄 Nextdoor still isn't ready. Reloading once...",
+            );
+
+            await page
+                .reload({
                     waitUntil: "domcontentloaded",
                     timeout: 60_000,
                 })
-                .catch(() => {});
-            await sleep(5_000);
+                .catch((error) => {
+                    console.log(
+                        `ℹ️ Reload still settling: ${error.message}`,
+                    );
+                });
+
+            hydratingStartedAt = Date.now();
+
+            await sleep(7_000);
             continue;
         }
 
         await sleep(2_500);
     }
 
-    throw new Error("Nextdoor did not become ready before timeout.");
+    throw new Error(
+        "Nextdoor did not become ready before timeout.",
+    );
 }
-
 async function expandSeeMore(page) {
     const buttons = page.locator(
         'button:has-text("See more"), [data-testid="see-more-text"]',
