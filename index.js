@@ -80,24 +80,53 @@ const REALTOR_SEARCH_TEXT = "by owner";
 const REALTOR_CATEGORY_TEXT = "Home sales";
 
 const STANDARD_SEARCH_TERM_LEAD_TYPES = {
+    // Outdoor lighting
     lights: ["outdoor_lighting"],
     "outdoor lighting": ["outdoor_lighting"],
 
+    // Bookkeeping — broad learning terms
     bookkeeper: ["bookkeeper"],
     bookkeeping: ["bookkeeper"],
     accountant: ["bookkeeper"],
     quickbooks: ["bookkeeper"],
     "tax help": ["bookkeeper"],
     "payroll help": ["bookkeeper"],
+
+    // Bookkeeping — higher-intent terms
+    "looking for a bookkeeper": ["bookkeeper"],
+    "looking for an accountant": ["bookkeeper"],
+    "looking for a cpa": ["bookkeeper"],
+    "tax accountant": ["bookkeeper"],
+    "cpa recommendation": ["bookkeeper"],
+    "quickbooks help": ["bookkeeper"],
+    "quickbooks troubleshooting": ["bookkeeper"],
+    "quickbooks cleanup": ["bookkeeper"],
+    "irs help": ["bookkeeper"],
+    "back taxes": ["bookkeeper"],
+    "tax preparation": ["bookkeeper"],
 };
 
 const BOOKKEEPING_SEARCH_TERMS = new Set([
+    // Broad learning terms
     "bookkeeper",
     "bookkeeping",
     "accountant",
     "quickbooks",
     "tax help",
     "payroll help",
+
+    // Higher-intent terms
+    "looking for a bookkeeper",
+    "looking for an accountant",
+    "looking for a cpa",
+    "tax accountant",
+    "cpa recommendation",
+    "quickbooks help",
+    "quickbooks troubleshooting",
+    "quickbooks cleanup",
+    "irs help",
+    "back taxes",
+    "tax preparation",
 ]);
 
 const OUTDOOR_LIGHTING_SEARCH_TERMS = new Set([
