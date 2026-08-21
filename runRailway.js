@@ -60,13 +60,13 @@ async function getWebSocket(port, timeoutMs = 60_000) {
     );
 }
 
-function runScraper(ws) {
+function runNodeScript(scriptName, ws, label) {
     return new Promise((resolve, reject) => {
-        console.log("▶️ Launching index.js...");
+        console.log(`▶️ ${label}...`);
 
         const child = spawn(
             process.execPath,
-            ["index.js"],
+            [scriptName],
             {
                 cwd: __dirname,
                 stdio: "inherit",
@@ -87,12 +87,28 @@ function runScraper(ws) {
 
             reject(
                 new Error(
-                    `Scraper exited with code ${code ?? "null"}` +
+                    `${scriptName} exited with code ${code ?? "null"}` +
                     `${signal ? ` and signal ${signal}` : ""}`,
                 ),
             );
         });
     });
+}
+
+function runNextdoorPreflight(ws) {
+    return runNodeScript(
+        "bootstrapNextdoor.js",
+        ws,
+        "Preparing a fresh verified Nextdoor tab",
+    );
+}
+
+function runScraper(ws) {
+    return runNodeScript(
+        "index.js",
+        ws,
+        "Launching index.js",
+    );
 }
 
 async function main() {
@@ -123,6 +139,11 @@ async function main() {
         )}`,
     );
 
+    // Multilogin keeps browser tabs between scheduled runs. Always normalize
+    // the browser state first so index.js never boots from yesterday's stale
+    // search/detail page. The preflight retries once with a brand-new page and
+    // prints useful diagnostics when Nextdoor is not actually ready.
+    await runNextdoorPreflight(ws);
     await runScraper(ws);
 
     console.log("✅ Railway realtor + lights + bookkeeping automation completed.");
