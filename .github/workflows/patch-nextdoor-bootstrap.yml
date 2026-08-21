@@ -1,0 +1,288 @@
+name: Patch Nextdoor bootstrap
+
+on:
+  push:
+    branches:
+      - fix/fresh-nextdoor-bootstrap
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/fresh-nextdoor-bootstrap
+          fetch-depth: 0
+
+      - name: Patch fresh Nextdoor bootstrap
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('index.js')
+          text = path.read_text()
+
+          helper_anchor = '''async function getCurrentNextdoorPage(context) {
+              const pages = context.pages().filter((page) => !page.isClosed());
+
+              return (
+                  pages.find((page) => /nextdoor\\.com/i.test(page.url())) ||
+                  pages[0] ||
+                  context.newPage()
+              );
+          }
+
+          async function waitForNextdoorReady(
+          '''
+
+          helper_replacement = '''async function getCurrentNextdoorPage(context) {
+              const pages = context.pages().filter((page) => !page.isClosed());
+
+              return (
+                  pages.find((page) => /nextdoor\\.com/i.test(page.url())) ||
+                  pages[0] ||
+                  context.newPage()
+              );
+          }
+
+          async function logNextdoorReadinessDiagnostics(
+              context,
+              page,
+              label,
+          ) {
+              const livePages = context
+                  .pages()
+                  .filter((candidate) => !candidate.isClosed());
+
+              let title = '';
+              let bodyText = '';
+              let searchBoxVisible = false;
+              let forSaleVisible = false;
+              let dialogCount = 0;
+
+              if (page && !page.isClosed()) {
+                  title = await page.title().catch(() => '');
+                  bodyText = cleanText(
+                      await page
+                          .locator('body')
+                          .innerText({ timeout: 3_000 })
+                          .catch(() => ''),
+                  ).slice(0, 1_200);
+
+                  searchBoxVisible = Boolean(
+                      await findVisibleSearchBox(page).catch(() => null),
+                  );
+
+                  forSaleVisible = Boolean(
+                      await firstVisible([
+                          page.getByText('For Sale & Free', { exact: true }),
+                          page.getByRole('link', { name: /For Sale & Free/i }),
+                          page.getByRole('button', { name: /For Sale & Free/i }),
+                          page.locator('a[href*="/for_sale_and_free"]'),
+                      ]).catch(() => null),
+                  );
+
+                  dialogCount = await page
+                      .locator('[role="dialog"], [aria-modal="true"]')
+                      .count()
+                      .catch(() => 0);
+              }
+
+              const looksLoggedOut =
+                  /(?:log in|sign in|join nextdoor|sign up)/i.test(bodyText);
+
+              console.error(`🩺 Nextdoor readiness diagnostics (${label})`);
+              console.error(`   Live tabs: ${livePages.length}`);
+              console.error(`   URL: ${page && !page.isClosed() ? page.url() : '(closed)'}`);
+              console.error(`   Title: ${title || '(empty)'}`);
+              console.error(`   Search box visible: ${searchBoxVisible}`);
+              console.error(`   For Sale & Free visible: ${forSaleVisible}`);
+              console.error(`   Dialog/overlay count: ${dialogCount}`);
+              console.error(`   Looks logged out: ${looksLoggedOut}`);
+              console.error(`   Body excerpt: ${bodyText || '(empty)'}`);
+          }
+
+          async function createFreshNextdoorBootstrapPage(
+              context,
+              label,
+          ) {
+              const page = await createConfiguredPage(context, label);
+
+              // Multilogin persists tabs between runs. Do not bootstrap from a
+              // stale search/detail page left by yesterday's automation.
+              await closeStaleContextPages(context, page);
+
+              console.log(
+                  `🆕 Opening a fresh Nextdoor bootstrap page (${label})...`,
+              );
+
+              await page
+                  .goto(
+                      'https://nextdoor.com/news_feed/',
+                      {
+                          waitUntil: 'domcontentloaded',
+                          timeout: 60_000,
+                      },
+                  )
+                  .catch((error) => {
+                      console.log(
+                          `ℹ️ Fresh feed navigation still settling: ${error.message}`,
+                      );
+                  });
+
+              await sleep(5_000);
+              return page;
+          }
+
+          async function bootstrapNextdoor(context) {
+              let lastError = null;
+
+              for (let attempt = 1; attempt <= 2; attempt += 1) {
+                  let page = null;
+
+                  try {
+                      page = await createFreshNextdoorBootstrapPage(
+                          context,
+                          `bootstrap:${attempt}`,
+                      );
+
+                      const readyPage = await waitForNextdoorReady(
+                          context,
+                          attempt === 1 ? 75_000 : 90_000,
+                      );
+
+                      await closeStaleContextPages(context, readyPage);
+                      return readyPage;
+                  } catch (error) {
+                      lastError = error;
+
+                      await logNextdoorReadinessDiagnostics(
+                          context,
+                          page,
+                          `attempt ${attempt}/2`,
+                      ).catch(() => {});
+
+                      if (attempt < 2) {
+                          console.warn(
+                              '🔁 Nextdoor bootstrap did not become ready; replacing the page and retrying once.',
+                          );
+                          await closePageSafely(
+                              page,
+                              `failed bootstrap page ${attempt}`,
+                          );
+                          continue;
+                      }
+                  }
+              }
+
+              throw lastError || new Error(
+                  'Nextdoor bootstrap failed after two fresh-page attempts.',
+              );
+          }
+
+          async function waitForNextdoorReady(
+          '''
+
+          if helper_anchor not in text:
+              raise SystemExit('helper anchor not found')
+          text = text.replace(helper_anchor, helper_replacement, 1)
+
+          shell_anchor = '''        if (forSaleAndFree) {
+              console.log(
+                  `✅ Nextdoor is ready — For Sale & Free found: ${url}`,
+              );
+
+              return page;
+          }
+
+          // ---------------------------------------------------------
+          // PAGE APPEARS OPEN BUT STILL HYDRATING
+          // ---------------------------------------------------------
+          '''
+
+          shell_replacement = '''        if (forSaleAndFree) {
+              console.log(
+                  `✅ Nextdoor is ready — For Sale & Free found: ${url}`,
+              );
+
+              return page;
+          }
+
+          // ---------------------------------------------------------
+          // AUTHENTICATED NEXTDOOR SHELL READY
+          // ---------------------------------------------------------
+          // Nextdoor occasionally moves/hides the global search input while
+          // the authenticated feed itself is fully usable. Treat a substantial
+          // visible feed shell as ready, but never accept an obvious login view.
+          const bodyText = cleanText(
+              await page
+                  .locator('body')
+                  .innerText({ timeout: 2_000 })
+                  .catch(() => ''),
+          );
+
+          const looksLoggedOut =
+              /(?:log in|sign in|join nextdoor|sign up)/i.test(
+                  bodyText.slice(0, 2_000),
+              );
+
+          const mainShellVisible = await firstVisible([
+              page.locator('main'),
+              page.locator('[role="main"]'),
+              page.locator('a[href*="/news_feed"]'),
+              page.locator('a[href*="/for_sale_and_free"]'),
+          ]);
+
+          if (
+              mainShellVisible &&
+              !looksLoggedOut &&
+              bodyText.length >= 500
+          ) {
+              console.log(
+                  `✅ Nextdoor is ready — authenticated feed shell found: ${url}`,
+              );
+              return page;
+          }
+
+          // ---------------------------------------------------------
+          // PAGE APPEARS OPEN BUT STILL HYDRATING
+          // ---------------------------------------------------------
+          '''
+
+          if shell_anchor not in text:
+              raise SystemExit('readiness shell anchor not found')
+          text = text.replace(shell_anchor, shell_replacement, 1)
+
+          startup_old = '''        bootstrapPage = await waitForNextdoorReady(context, 180_000);
+          await closeStaleContextPages(context, bootstrapPage);
+          '''
+
+          startup_new = '''        bootstrapPage = await bootstrapNextdoor(context);
+          '''
+
+          if startup_old not in text:
+              raise SystemExit('startup anchor not found')
+          text = text.replace(startup_old, startup_new, 1)
+
+          path.write_text(text)
+          PY
+
+          node --check index.js
+          grep -q "bootstrapNextdoor(context)" index.js
+          grep -q "Nextdoor readiness diagnostics" index.js
+          grep -q "authenticated feed shell found" index.js
+
+      - name: Commit verified patch and remove one-shot workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/patch-nextdoor-bootstrap.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- index.js .github/workflows/patch-nextdoor-bootstrap.yml
+          git commit -m "Fix stale Nextdoor bootstrap handling"
+          git push origin HEAD:fix/fresh-nextdoor-bootstrap
