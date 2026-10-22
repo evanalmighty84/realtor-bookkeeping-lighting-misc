@@ -83,6 +83,116 @@ const STANDARD_SEARCH_TERM_LEAD_TYPES = {
     // Outdoor lighting
     lights: ["outdoor_lighting"],
     "outdoor lighting": ["outdoor_lighting"],
+    "govee": ["outdoor_lighting"],
+    "Christmas lights": ["outdoor_lighting"],
+    "Holiday Lighting": ["outdoor_lighting"],
+
+
+        // WINDOWS — General
+        window: ["windows"],
+        windows: ["windows"],
+        "window repair": ["windows"],
+        "window replacement": ["windows"],
+        "window installation": ["windows"],
+        "window installer": ["windows"],
+        "new windows": ["windows"],
+        "replace windows": ["windows"],
+        "broken window": ["windows"],
+        "cracked window": ["windows"],
+        "window glass": ["windows"],
+        "glass replacement": ["windows"],
+        "window leak": ["windows"],
+        "leaky windows": ["windows"],
+        "foggy windows": ["windows"],
+        "window seal": ["windows"],
+        "window screen": ["windows"],
+        "window frame": ["windows"],
+        "energy efficient windows": ["windows"],
+
+        // WINDOWS — Blinds & Treatments
+        blinds: ["windows"],
+        "new blinds": ["windows"],
+        "window shades": ["windows"],
+        "window treatments": ["windows"],
+        "plantation shutters": ["windows"],
+        "custom blinds": ["windows"],
+
+        // WINDOWS — Higher Intent
+        "looking for window replacement": ["windows"],
+        "window company recommendation": ["windows"],
+        "window repair recommendation": ["windows"],
+        "need new windows": ["windows"],
+        "window contractor": ["windows"],
+
+        // DOORS — General
+        door: ["doors"],
+        doors: ["doors"],
+        "door repair": ["doors"],
+        "door replacement": ["doors"],
+        "door installation": ["doors"],
+        "door installer": ["doors"],
+        "new door": ["doors"],
+        "new doors": ["doors"],
+        "replace door": ["doors"],
+        "front door": ["doors"],
+        "entry door": ["doors"],
+        "exterior door": ["doors"],
+        "interior door": ["doors"],
+        "patio door": ["doors"],
+        "sliding door": ["doors"],
+        "french doors": ["doors"],
+        "storm door": ["doors"],
+        "screen door": ["doors"],
+        "security door": ["doors"],
+        "door frame": ["doors"],
+        "door jamb": ["doors"],
+        "door threshold": ["doors"],
+        "door seal": ["doors"],
+        "door weatherstripping": ["doors"],
+        "broken door": ["doors"],
+        "door won't close": ["doors"],
+        "door alignment": ["doors"],
+        "door hinges": ["doors"],
+
+        // DOORS — Higher Intent
+        "looking for door replacement": ["doors"],
+        "door company recommendation": ["doors"],
+        "door repair recommendation": ["doors"],
+        "need a new door": ["doors"],
+        "door contractor": ["doors"],
+        "front door replacement": ["doors"],
+        "patio door replacement": ["doors"],
+        "sliding glass door repair": ["doors"],
+
+        // SIDING — General
+        siding: ["siding"],
+        "new siding": ["siding"],
+        "siding repair": ["siding"],
+        "siding replacement": ["siding"],
+        "siding installation": ["siding"],
+        "siding installer": ["siding"],
+        "replace siding": ["siding"],
+        "house siding": ["siding"],
+        "exterior siding": ["siding"],
+        "vinyl siding": ["siding"],
+        "fiber cement siding": ["siding"],
+        "hardie board": ["siding"],
+        "hardie plank": ["siding"],
+        "james hardie": ["siding"],
+        "wood siding": ["siding"],
+        "damaged siding": ["siding"],
+        "rotted siding": ["siding"],
+        "loose siding": ["siding"],
+        "siding panels": ["siding"],
+        "siding contractor": ["siding"],
+
+        // SIDING — Higher Intent
+        "looking for siding contractor": ["siding"],
+        "siding company recommendation": ["siding"],
+        "siding repair recommendation": ["siding"],
+        "need new siding": ["siding"],
+        "siding estimate": ["siding"],
+        "siding quote": ["siding"],
 
     // Bookkeeping — broad learning terms
     bookkeeper: ["bookkeeper"],
@@ -277,21 +387,18 @@ function buildStandardSearchPlan() {
     const plan = [];
 
     if (RUN_OUTDOOR_LIGHTING) {
-        plan.push("lights", "outdoor lighting");
+        plan.push(
+            ...OUTDOOR_LIGHTING_SEARCH_TERMS
+        );
     }
 
     if (RUN_BOOKKEEPING) {
         plan.push(
-            "bookkeeper",
-            "bookkeeping",
-            "accountant",
-            "quickbooks",
-            "tax help",
-            "payroll help",
+            ...BOOKKEEPING_SEARCH_TERMS
         );
     }
 
-    return plan;
+    return [...new Set(plan)];
 }
 
 async function configurePage(page, label) {
