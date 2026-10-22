@@ -383,23 +383,39 @@ function getSourceKind(query) {
     return "standard";
 }
 
+
 function buildStandardSearchPlan() {
     const plan = [];
 
+    // Outdoor lighting
     if (RUN_OUTDOOR_LIGHTING) {
         plan.push(
             ...OUTDOOR_LIGHTING_SEARCH_TERMS
         );
     }
 
+    // Bookkeeping
     if (RUN_BOOKKEEPING) {
         plan.push(
             ...BOOKKEEPING_SEARCH_TERMS
         );
     }
 
+    // Windows, Doors & Siding
+    plan.push(
+        ...Object.keys(STANDARD_SEARCH_TERM_LEAD_TYPES).filter(
+            (term) =>
+                STANDARD_SEARCH_TERM_LEAD_TYPES[term].some(
+                    (type) =>
+                        ["windows", "doors", "siding"].includes(type)
+                )
+        )
+    );
+
+    // Remove duplicate search terms
     return [...new Set(plan)];
 }
+
 
 async function configurePage(page, label) {
     page.setDefaultTimeout(PAGE_DEFAULT_TIMEOUT_MS);
