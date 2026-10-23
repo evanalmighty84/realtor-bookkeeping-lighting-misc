@@ -276,6 +276,32 @@ function getErrorMessage(error) {
     return error?.message || String(error || "Unknown error");
 }
 
+function parseNextdoorThrottleMessage(text = "") {
+    const match = String(text).match(
+        /Throttled,\s*wait\s*(\d+)\s*seconds\.?/i,
+    );
+
+    if (!match) return null;
+
+    return {
+        waitSeconds: Number(match[1]),
+        message: match[0],
+    };
+}
+
+function isNextdoorThrottleError(error) {
+    return /^NEXTDOOR_THROTTLED:/i.test(getErrorMessage(error));
+}
+
+async function detectNextdoorThrottle(page) {
+    const bodyText = await page
+        .locator("body")
+        .innerText()
+        .catch(() => "");
+
+    return parseNextdoorThrottleMessage(bodyText);
+}
+
 function isTargetCrashError(error) {
     return TARGET_CRASH_PATTERN.test(getErrorMessage(error));
 }
@@ -1471,6 +1497,19 @@ async function searchNextdoorPosts(page, query) {
         await applyTodayFilter(page);
         await sleep(1_800);
     }
+
+    const throttle = await detectNextdoorThrottle(page);
+
+    if (throttle) {
+        console.error(
+            `⛔ Nextdoor throttled search for "${query}". ` +
+            `Requested wait: ${throttle.waitSeconds} seconds.`,
+        );
+
+        throw new Error(
+            `NEXTDOOR_THROTTLED:${throttle.waitSeconds}:${query}`,
+        );
+    }
 }
 
 async function collectPostLinks(page, limit = MAX_POSTS_PER_TERM) {
@@ -1907,7 +1946,8 @@ async function collectPostsForSearchTerm(context, query) {
     } catch (error) {
         if (
             browserDisconnected ||
-            isBrowserDisconnectedError(error)
+            isBrowserDisconnectedError(error) ||
+            isNextdoorThrottleError(error)
         ) {
             throw error;
         }
@@ -2792,6 +2832,26 @@ async function main() {
                     throw error;
                 }
 
+                if (isNextdoorThrottleError(error)) {
+                    const message = getErrorMessage(error);
+                    const parts = message.split(":");
+                    const waitSeconds = Number(parts[1] || 0);
+
+                    console.error(
+                        `⛔ Nextdoor throttle detected. Stopping this scraper run ` +
+                        `instead of continuing through the remaining search terms.`,
+                    );
+
+                    if (waitSeconds > 0) {
+                        console.error(
+                            `⏳ Nextdoor requested a cooldown of approximately ` +
+                            `${waitSeconds} seconds.`,
+                        );
+                    }
+
+                    throw error;
+                }
+
                 console.error(
                     `⏭️ Skipping search term "${query}": ${getErrorMessage(error)}`,
                 );
@@ -2825,7 +2885,7 @@ async function main() {
         if (!searchRunFinalized) {
             await finishSearchRun(
                 runId,
-                "failed",
+                isNextdoorThrottleError(error) ? "throttled" : "failed",
                 totals,
                 getErrorMessage(error),
             ).catch(() => {});
