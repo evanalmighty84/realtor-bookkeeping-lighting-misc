@@ -1444,13 +1444,43 @@ async function searchNextdoorPosts(page, query) {
 async function collectPostLinks(page, limit = MAX_POSTS_PER_TERM) {
     console.log("⬇️ Loading search results...");
 
+    const resultSelector =
+        'a:has([data-testid="search-result-image"]), ' +
+        'a[href*="/p/"], a[href*="/posting/"]';
+
+    // Nextdoor can render the search shell before the result cards hydrate.
+    // Give the cards time to appear before treating a zero count as meaningful.
+    await page
+        .waitForFunction(
+            () => {
+                const hasResultCard =
+                    document.querySelector(
+                        'a:has([data-testid="search-result-image"]), ' +
+                        'a[href*="/p/"], a[href*="/posting/"]'
+                    );
+
+                if (hasResultCard) return true;
+
+                const text =
+                    (document.body?.innerText || "").toLowerCase();
+
+                return (
+                    /no results|no posts|couldn.?t find|try another search/i
+                        .test(text)
+                );
+            },
+            { timeout: 15_000 },
+        )
+        .catch(() => {});
+
     let previousCount = -1;
     let stablePasses = 0;
 
     for (let pass = 1; pass <= 20; pass += 1) {
         const count = await page
-            .locator('a[href*="/p/"], a[href*="/posting/"]')
-            .count();
+            .locator(resultSelector)
+            .count()
+            .catch(() => 0);
 
         console.log(`   pass ${pass}: ${count} links loaded`);
 
@@ -1470,6 +1500,7 @@ async function collectPostLinks(page, limit = MAX_POSTS_PER_TERM) {
         const results = [];
         const seen = new Set();
         const anchors = document.querySelectorAll(
+            'a:has([data-testid="search-result-image"]), ' +
             'a[href*="/p/"], a[href*="/posting/"]',
         );
 
@@ -1685,6 +1716,35 @@ async function collectPostsForSearchTerm(context, query) {
 
             if (asynchronousTargetCrashCount > crashCountAtStart) {
                 throw new Error(`Target crashed while searching for "${query}".`);
+            }
+
+            if (posts.length === 0) {
+                const bodyText = await page
+                    .locator("body")
+                    .innerText()
+                    .catch(() => "");
+
+                const explicitNoResults =
+                    /no results|no posts|couldn.?t find|try another search/i
+                        .test(bodyText);
+
+                console.log(
+                    `🧪 Zero-result check for "${query}": ` +
+                    `explicitNoResults=${explicitNoResults}, ` +
+                    `bodyLength=${bodyText.length}, url=${page.url()}`,
+                );
+
+                if (!explicitNoResults) {
+                    throw new Error(
+                        `SEARCH_RESULTS_NOT_HYDRATED for "${query}" — ` +
+                        `no result cards were extracted and Nextdoor did not ` +
+                        `show an explicit no-results state.`,
+                    );
+                }
+
+                console.log(
+                    `ℹ️ Nextdoor explicitly returned no posts for "${query}".`,
+                );
             }
 
             return posts;
