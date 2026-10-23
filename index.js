@@ -276,6 +276,21 @@ function getErrorMessage(error) {
     return error?.message || String(error || "Unknown error");
 }
 
+function shuffleArray(items) {
+    const shuffled = [...items];
+
+    for (let index = shuffled.length - 1; index > 0; index -= 1) {
+        const swapIndex = Math.floor(Math.random() * (index + 1));
+
+        [shuffled[index], shuffled[swapIndex]] = [
+            shuffled[swapIndex],
+            shuffled[index],
+        ];
+    }
+
+    return shuffled;
+}
+
 function parseNextdoorThrottleMessage(text = "") {
     const match = String(text).match(
         /Throttled,\s*wait\s*(\d+)\s*seconds\.?/i,
@@ -2744,7 +2759,8 @@ async function main() {
     await purgeExpiredSearchHistory();
 
     const standardPlan = buildStandardSearchPlan();
-    const plannedSearchTerms = standardPlan.length + (RUN_REALTOR ? 1 : 0);
+    const shuffledStandardPlan = shuffleArray(standardPlan);
+    const plannedSearchTerms = shuffledStandardPlan.length + (RUN_REALTOR ? 1 : 0);
     const runId = randomUUID();
 
     const totals = {
@@ -2764,6 +2780,13 @@ async function main() {
     await createSearchRun(runId, plannedSearchTerms);
     console.log(`🆔 Special search run: ${runId}`);
     console.log(`📌 Planned workflows/terms: ${plannedSearchTerms}`);
+    console.log(
+        `🔀 Randomized ${shuffledStandardPlan.length} standard search terms for this run.`,
+    );
+    console.log(
+        "🔀 First 10 standard terms this run:",
+        shuffledStandardPlan.slice(0, 10),
+    );
 
     try {
         browser = await chromium.connectOverCDP(process.env.MULTILOGIN_WS);
@@ -2798,8 +2821,8 @@ async function main() {
             addStats(totals, realtorStats);
         }
 
-        for (let index = 0; index < standardPlan.length; index += 1) {
-            const query = standardPlan[index];
+        for (let index = 0; index < shuffledStandardPlan.length; index += 1) {
+            const query = shuffledStandardPlan[index];
 
             if (browserDisconnected || !browser.isConnected()) {
                 throw new Error(
@@ -2810,7 +2833,7 @@ async function main() {
             console.log("");
             console.log("############################################################");
             console.log(
-                `🔎 STANDARD SEARCH ${index + 1}/${standardPlan.length}: ` +
+                `🔎 STANDARD SEARCH ${index + 1}/${shuffledStandardPlan.length}: ` +
                 `"${query}" → ${getSearchDistance(query)} miles + Today`,
             );
             console.log("############################################################");
