@@ -42,10 +42,7 @@ const REALTOR_MAX_LISTINGS = Math.max(
     Number(process.env.REALTOR_MAX_LISTINGS || 50),
 );
 
-const SEARCH_PAGE_MAX_ATTEMPTS = Math.max(
-    1,
-    Number(process.env.SEARCH_PAGE_MAX_ATTEMPTS || 3),
-);
+const SEARCH_PAGE_MAX_ATTEMPTS = 1;
 
 const DETAIL_PAGE_MAX_ATTEMPTS = Math.max(
     1,
@@ -443,6 +440,41 @@ async function configurePage(page, label) {
             console.log(
                 `ℹ️ Suppressed ${suppressedPageErrors} harmless ` +
                 `network/ad page error(s) for ${label}.`,
+            );
+        }
+    });
+
+    page.on("requestfailed", (request) => {
+        const requestUrl = request.url();
+        const resourceType = request.resourceType();
+        const failure = request.failure()?.errorText || "unknown";
+
+        if (
+            /nextdoor\.com/i.test(requestUrl) ||
+            ["document", "xhr", "fetch", "script"].includes(resourceType)
+        ) {
+            console.warn(
+                `🌐 Request failed (${label}) [${resourceType}] ` +
+                `${failure}: ${requestUrl.slice(0, 500)}`,
+            );
+        }
+    });
+
+    page.on("response", (response) => {
+        const status = response.status();
+        if (status < 400) return;
+
+        const request = response.request();
+        const resourceType = request.resourceType();
+        const responseUrl = response.url();
+
+        if (
+            /nextdoor\.com/i.test(responseUrl) ||
+            ["document", "xhr", "fetch", "script"].includes(resourceType)
+        ) {
+            console.warn(
+                `🌐 HTTP ${status} (${label}) [${resourceType}]: ` +
+                responseUrl.slice(0, 500),
             );
         }
     });
@@ -1444,34 +1476,7 @@ async function searchNextdoorPosts(page, query) {
 async function collectPostLinks(page, limit = MAX_POSTS_PER_TERM) {
     console.log("⬇️ Loading search results...");
 
-    const resultSelector =
-        'a:has([data-testid="search-result-image"]), ' +
-        'a[href*="/p/"], a[href*="/posting/"]';
-
-    // Nextdoor can render the search shell before the result cards hydrate.
-    // Give the cards time to appear before treating a zero count as meaningful.
-    await page
-        .waitForFunction(
-            () => {
-                const hasResultCard =
-                    document.querySelector(
-                        'a:has([data-testid="search-result-image"]), ' +
-                        'a[href*="/p/"], a[href*="/posting/"]'
-                    );
-
-                if (hasResultCard) return true;
-
-                const text =
-                    (document.body?.innerText || "").toLowerCase();
-
-                return (
-                    /no results|no posts|couldn.?t find|try another search/i
-                        .test(text)
-                );
-            },
-            { timeout: 15_000 },
-        )
-        .catch(() => {});
+    const resultSelector = 'a[href*="/p/"], a[href*="/posting/"]';
 
     let previousCount = -1;
     let stablePasses = 0;
@@ -1500,7 +1505,6 @@ async function collectPostLinks(page, limit = MAX_POSTS_PER_TERM) {
         const results = [];
         const seen = new Set();
         const anchors = document.querySelectorAll(
-            'a:has([data-testid="search-result-image"]), ' +
             'a[href*="/p/"], a[href*="/posting/"]',
         );
 
@@ -1698,80 +1702,228 @@ async function extractPostDetails(detailPage, post, searchTerm) {
     };
 }
 
-async function collectPostsForSearchTerm(context, query) {
-    let lastError = null;
+async function logSearchPageDiagnostics(page, query) {
+    console.log("");
+    console.log("🧪 ================= SEARCH PAGE DIAGNOSTICS =================");
+    console.log(`🧪 Query: "${query}"`);
+    console.log(`🧪 URL: ${page.url()}`);
 
-    for (let attempt = 1; attempt <= SEARCH_PAGE_MAX_ATTEMPTS; attempt += 1) {
-        let page = null;
-        const crashCountAtStart = asynchronousTargetCrashCount;
+    try {
+        const snapshot = await page.evaluate(() => {
+            const clean = (value = "") =>
+                String(value).replace(/\s+/g, " ").trim();
 
-        try {
-            page = await createConfiguredPage(
-                context,
-                `search:${query}:attempt:${attempt}`,
-            );
+            const safeText = (element) =>
+                clean(element?.innerText || element?.textContent || "");
 
-            await searchNextdoorPosts(page, query);
-            const posts = await collectPostLinks(page, MAX_POSTS_PER_TERM);
+            const allAnchors = [...document.querySelectorAll("a[href]")];
+            const allTestIds = [
+                ...document.querySelectorAll("[data-testid]"),
+            ];
 
-            if (asynchronousTargetCrashCount > crashCountAtStart) {
-                throw new Error(`Target crashed while searching for "${query}".`);
-            }
-
-            if (posts.length === 0) {
-                const bodyText = await page
-                    .locator("body")
-                    .innerText()
-                    .catch(() => "");
-
-                const explicitNoResults =
-                    /no results|no posts|couldn.?t find|try another search/i
-                        .test(bodyText);
-
-                console.log(
-                    `🧪 Zero-result check for "${query}": ` +
-                    `explicitNoResults=${explicitNoResults}, ` +
-                    `bodyLength=${bodyText.length}, url=${page.url()}`,
+            const visible = (element) => {
+                if (!element) return false;
+                const style = window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return (
+                    style.display !== "none" &&
+                    style.visibility !== "hidden" &&
+                    Number(style.opacity || 1) !== 0 &&
+                    rect.width > 0 &&
+                    rect.height > 0
                 );
+            };
 
-                if (!explicitNoResults) {
-                    throw new Error(
-                        `SEARCH_RESULTS_NOT_HYDRATED for "${query}" — ` +
-                        `no result cards were extracted and Nextdoor did not ` +
-                        `show an explicit no-results state.`,
-                    );
-                }
+            const textSamples = [
+                ...document.querySelectorAll(
+                    "main, [role=main], article, [role=article], li, section, button, a",
+                ),
+            ]
+                .filter(visible)
+                .map((element) => safeText(element))
+                .filter((text) => text.length >= 3)
+                .filter((text, index, array) => array.indexOf(text) === index)
+                .slice(0, 60)
+                .map((text) => text.slice(0, 500));
 
-                console.log(
-                    `ℹ️ Nextdoor explicitly returned no posts for "${query}".`,
-                );
-            }
+            const hrefSamples = allAnchors
+                .map((anchor) => anchor.href)
+                .filter(Boolean)
+                .filter((href, index, array) => array.indexOf(href) === index)
+                .slice(0, 60);
 
-            return posts;
-        } catch (error) {
-            lastError = error;
+            const testIdSamples = allTestIds
+                .map((element) => ({
+                    testid: element.getAttribute("data-testid"),
+                    tag: element.tagName,
+                    text: safeText(element).slice(0, 250),
+                    visible: visible(element),
+                }))
+                .filter((item, index, array) =>
+                    array.findIndex(
+                        (other) =>
+                            other.testid === item.testid &&
+                            other.tag === item.tag &&
+                            other.text === item.text,
+                    ) === index
+                )
+                .slice(0, 80);
 
-            if (
-                browserDisconnected ||
-                isBrowserDisconnectedError(error)
-            ) {
-                throw error;
-            }
+            const inputSamples = [...document.querySelectorAll("input")]
+                .slice(0, 30)
+                .map((input) => ({
+                    type: input.type,
+                    placeholder: input.placeholder,
+                    ariaLabel: input.getAttribute("aria-label"),
+                    valueLength: String(input.value || "").length,
+                    visible: visible(input),
+                }));
 
-            console.error(
-                `❌ Search attempt ${attempt}/${SEARCH_PAGE_MAX_ATTEMPTS} ` +
-                `failed for "${query}": ${getErrorMessage(error)}`,
-            );
+            const buttonSamples = [
+                ...document.querySelectorAll("button, [role=button]"),
+            ]
+                .filter(visible)
+                .slice(0, 40)
+                .map((button) => ({
+                    text: safeText(button).slice(0, 250),
+                    ariaLabel: button.getAttribute("aria-label"),
+                    testid: button.getAttribute("data-testid"),
+                }));
 
-            if (attempt < SEARCH_PAGE_MAX_ATTEMPTS) {
-                await sleep(attempt * 2_000);
-            }
-        } finally {
-            await closePageSafely(page, `search page for "${query}"`);
-        }
+            const frameSamples = [...document.querySelectorAll("iframe")]
+                .slice(0, 20)
+                .map((frame) => ({
+                    src: frame.src ? frame.src.slice(0, 500) : "",
+                    title: frame.title || "",
+                    visible: visible(frame),
+                }));
+
+            const bodyText = document.body?.innerText || "";
+            const bodyHtml = document.body?.innerHTML || "";
+
+            return {
+                title: document.title,
+                readyState: document.readyState,
+                visibilityState: document.visibilityState,
+                bodyTextLength: bodyText.length,
+                bodyTextPreview: bodyText.slice(0, 4_000),
+                bodyHtmlLength: bodyHtml.length,
+                bodyHtmlPreview: bodyHtml.slice(0, 8_000),
+                documentHtmlLength:
+                    document.documentElement?.outerHTML?.length || 0,
+                bodyClass: document.body?.className || "",
+                bodyChildCount: document.body?.children?.length || 0,
+                counts: {
+                    anchors: allAnchors.length,
+                    postLinks: document.querySelectorAll(
+                        'a[href*="/p/"], a[href*="/posting/"]'
+                    ).length,
+                    searchResultImages: document.querySelectorAll(
+                        '[data-testid="search-result-image"]'
+                    ).length,
+                    articles: document.querySelectorAll(
+                        "article, [role=article]"
+                    ).length,
+                    main: document.querySelectorAll(
+                        "main, [role=main]"
+                    ).length,
+                    buttons: document.querySelectorAll(
+                        "button, [role=button]"
+                    ).length,
+                    inputs: document.querySelectorAll("input").length,
+                    iframes: document.querySelectorAll("iframe").length,
+                    testIds: allTestIds.length,
+                    scripts: document.scripts.length,
+                    stylesheets: document.styleSheets.length,
+                },
+                hrefSamples,
+                testIdSamples,
+                inputSamples,
+                buttonSamples,
+                frameSamples,
+                textSamples,
+            };
+        });
+
+        console.log("🧪 DOM snapshot:");
+        console.log(JSON.stringify(snapshot, null, 2));
+    } catch (error) {
+        console.warn(
+            `🧪 Could not collect DOM snapshot for "${query}": ` +
+            getErrorMessage(error),
+        );
     }
 
-    throw lastError || new Error(`Search failed for "${query}".`);
+    try {
+        const frames = page.frames().map((frame) => ({
+            name: frame.name(),
+            url: frame.url().slice(0, 500),
+        }));
+        console.log("🧪 Playwright frames:");
+        console.log(JSON.stringify(frames, null, 2));
+    } catch (error) {
+        console.warn(
+            `🧪 Could not enumerate frames: ${getErrorMessage(error)}`,
+        );
+    }
+
+    try {
+        const html = await page.content();
+        console.log(`🧪 page.content() length: ${html.length}`);
+        console.log("🧪 page.content() preview:");
+        console.log(html.slice(0, 8_000));
+    } catch (error) {
+        console.warn(
+            `🧪 Could not read page.content(): ${getErrorMessage(error)}`,
+        );
+    }
+
+    console.log("🧪 ============================================================");
+    console.log("");
+}
+
+async function collectPostsForSearchTerm(context, query) {
+    let page = null;
+    const crashCountAtStart = asynchronousTargetCrashCount;
+
+    try {
+        page = await createConfiguredPage(
+            context,
+            `search:${query}`,
+        );
+
+        await searchNextdoorPosts(page, query);
+        const posts = await collectPostLinks(page, MAX_POSTS_PER_TERM);
+
+        if (asynchronousTargetCrashCount > crashCountAtStart) {
+            throw new Error(`Target crashed while searching for "${query}".`);
+        }
+
+        if (posts.length === 0) {
+            await logSearchPageDiagnostics(page, query);
+        }
+
+        return posts;
+    } catch (error) {
+        if (
+            browserDisconnected ||
+            isBrowserDisconnectedError(error)
+        ) {
+            throw error;
+        }
+
+        console.error(
+            `❌ Search failed for "${query}": ${getErrorMessage(error)}`,
+        );
+
+        if (page && !page.isClosed()) {
+            await logSearchPageDiagnostics(page, query).catch(() => {});
+        }
+
+        throw error;
+    } finally {
+        await closePageSafely(page, `search page for "${query}"`);
+    }
 }
 
 async function extractPostDetailsWithFreshPage(context, post, searchTerm) {
