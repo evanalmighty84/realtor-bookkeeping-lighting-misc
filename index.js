@@ -1940,14 +1940,13 @@ async function collectPostLinks(page, limit = MAX_POSTS_PER_TERM) {
             String(value).replace(/\s+/g, " ").trim();
 
         const results = [];
-        const seen = new Set();
         const anchors = document.querySelectorAll(
             'a[href*="/p/"], a[href*="/posting/"]',
         );
 
         for (const anchor of anchors) {
             const href = anchor.href;
-            if (!href || seen.has(href)) continue;
+            if (!href) continue;
 
             const primaryAvatar = anchor.querySelector(
                 '[data-testid="search-result-image"]',
@@ -2014,7 +2013,6 @@ async function collectPostLinks(page, limit = MAX_POSTS_PER_TERM) {
                 }
 
                 if (preview.length >= 15) {
-                    seen.add(href);
                     results.push({
                         url: href,
                         preview: preview.slice(0, 1_500),
@@ -2030,7 +2028,6 @@ async function collectPostLinks(page, limit = MAX_POSTS_PER_TERM) {
                 const preview = clean(root.innerText || anchor.innerText || "");
 
                 if (preview.length >= 15) {
-                    seen.add(href);
                     results.push({
                         url: href,
                         preview: preview.slice(0, 1_500),
@@ -2046,15 +2043,53 @@ async function collectPostLinks(page, limit = MAX_POSTS_PER_TERM) {
         return results;
     }, limit);
 
-    const unique = new Map();
+    const posts = [];
+    const collectedByUrl = new Map();
+    let sameCardDuplicates = 0;
+    let reusedUrlVariants = 0;
 
-    for (const post of raw) {
-        const url = normalizeRecordUrl(post.url);
-        if (!unique.has(url)) unique.set(url, { ...post, url });
+    for (const rawPost of raw) {
+        const post = {
+            ...rawPost,
+            url: normalizeRecordUrl(rawPost.url),
+        };
+
+        const priorPosts = collectedByUrl.get(post.url) || [];
+
+        const duplicate = priorPosts.some((prior) =>
+            authorsCompatibleForDuplicate(
+                prior.author,
+                post.author,
+            ) &&
+            descriptionsLookLikeSamePost(
+                prior.preview,
+                post.preview,
+            )
+        );
+
+        if (duplicate) {
+            sameCardDuplicates += 1;
+            continue;
+        }
+
+        if (priorPosts.length > 0) {
+            reusedUrlVariants += 1;
+            console.warn(
+                `⚠️ Same search returned one URL with different card content: ${post.url}`,
+            );
+        }
+
+        priorPosts.push(post);
+        collectedByUrl.set(post.url, priorPosts);
+        posts.push(post);
     }
 
-    const posts = [...unique.values()];
-    console.log(`🔗 Found ${posts.length} unique post(s).`);
+    console.log(
+        `🔗 Found ${posts.length} distinct post card(s); ` +
+        `${sameCardDuplicates} duplicate anchor/card(s) collapsed; ` +
+        `${reusedUrlVariants} reused-URL variant(s) preserved.`,
+    );
+
     return posts;
 }
 
