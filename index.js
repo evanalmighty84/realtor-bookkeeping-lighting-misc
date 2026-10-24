@@ -22,8 +22,7 @@ const CRM_API_BASE_URL =
 
 const NEXTDOOR_QUEUE_API_BASE_URL =
     process.env.NEXTDOOR_QUEUE_API_BASE_URL ||
-    process.env.CLUBHOUSE_API_BASE_URL ||
-    "";
+    "https://crm-function-app-5d4de511071d.herokuapp.com/server/lead_function/api/nextdoor";
 
 const NEXTDOOR_QUEUE_SCRAPER_KEY = "specialty";
 
@@ -307,10 +306,9 @@ async function fetchCarryoverSearchTerms(scraperKey) {
         return [];
     }
 
-    const endpointUrl = new URL(
-        `/nextdoor/search-queue/${encodeURIComponent(scraperKey)}`,
-        NEXTDOOR_QUEUE_API_BASE_URL,
-    ).toString();
+    const endpointUrl =
+        NEXTDOOR_QUEUE_API_BASE_URL.replace(/\/$/, "") +
+        `/search-queue/${encodeURIComponent(scraperKey)}`;
 
     try {
         console.log(
