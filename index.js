@@ -1174,6 +1174,43 @@ function authorsCompatibleForDuplicate(left, right) {
     return a === b;
 }
 
+function isCrossTermDuplicate(seenDuringRun, item) {
+    const url = normalizeRecordUrl(item.url || item.post_url);
+    const description =
+        item.preview || item.text || item.description || "";
+
+    const priorItems = seenDuringRun.get(url) || [];
+
+    const duplicate = priorItems.some((prior) =>
+        authorsCompatibleForDuplicate(
+            prior.author,
+            item.author,
+        ) &&
+        descriptionsLookLikeSamePost(
+            prior.description,
+            description,
+        )
+    );
+
+    if (duplicate) {
+        return true;
+    }
+
+    if (priorItems.length > 0) {
+        console.warn(
+            `⚠️ Same-run reused/mismatched URL not treated as cross-term duplicate: ${url}`,
+        );
+    }
+
+    priorItems.push({
+        author: item.author || null,
+        description,
+    });
+
+    seenDuringRun.set(url, priorItems);
+    return false;
+}
+
 async function getExistingUrls(items) {
     const urls = items
         .map((item) => normalizeRecordUrl(item.url || item.post_url))
@@ -2440,12 +2477,11 @@ async function processStandardSearchTerm({
         for (const post of allPosts) {
             const url = normalizeRecordUrl(post.url);
 
-            if (seenDuringRun.has(url)) {
+            if (isCrossTermDuplicate(seenDuringRun, post)) {
                 crossTermUrls.add(url);
                 continue;
             }
 
-            seenDuringRun.add(url);
             uniqueForThisRun.push(post);
         }
 
@@ -2920,12 +2956,11 @@ async function processRealtor({ context, runId, seenDuringRun }) {
         for (const listing of allListings) {
             const url = normalizeRecordUrl(listing.url);
 
-            if (seenDuringRun.has(url)) {
+            if (isCrossTermDuplicate(seenDuringRun, listing)) {
                 crossTermUrls.add(url);
                 continue;
             }
 
-            seenDuringRun.add(url);
             uniqueForThisRun.push(listing);
         }
 
@@ -3209,7 +3244,7 @@ async function main() {
         bootstrapPage = await waitForNextdoorReady(context, 180_000);
         await closeStaleContextPages(context, bootstrapPage);
 
-        const seenDuringRun = new Set();
+        const seenDuringRun = new Map();
 
         // Realtor is intentionally separate because it is NOT a normal Posts
         // search. It reproduces the locally-proven marketplace click/search/
