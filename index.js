@@ -1673,36 +1673,70 @@ async function applyDistanceFilter(page, targetMiles) {
     return false;
 }
 
-async function applyTodayFilter(page) {
+async function applyDateFilter(page, targetLabel = "Today") {
+    const anyDateLabel =
+        /^(All Time|Today|This Week|This Month|This Year)$/i;
+    const exactTarget = targetLabel === "This Week"
+        ? /^This Week$/i
+        : /^Today$/i;
+
     const trigger = await firstVisible([
-        page.getByRole("button", {
-            name: /^(All Time|Today|This Week|This Month|This Year)$/i,
-        }),
+        page.getByRole("button", { name: anyDateLabel }),
         page
             .locator("button, [role=button]")
-            .filter({
-                hasText: /^(All Time|Today|This Week|This Month|This Year)$/i,
-            }),
+            .filter({ hasText: anyDateLabel }),
     ]);
 
-    if (!trigger) return false;
+    if (!trigger) {
+        throw new Error(
+            "DATE_FILTER_NOT_FOUND: " + targetLabel,
+        );
+    }
 
-    const currentText = cleanText(await trigger.innerText().catch(() => ""));
-    if (/^today$/i.test(currentText)) return true;
+    const before = cleanText(await trigger.innerText().catch(() => ""));
 
-    await trigger.click();
-    await sleep(500);
+    if (!exactTarget.test(before)) {
+        await trigger.click();
+        await sleep(500);
 
-    const option = await firstVisible([
-        page.getByRole("menuitem", { name: /^Today$/i }),
-        page.getByRole("option", { name: /^Today$/i }),
-        page.getByText(/^Today$/i),
+        const option = await firstVisible([
+            page.getByRole("menuitem", { name: exactTarget }),
+            page.getByRole("option", { name: exactTarget }),
+            page.getByText(exactTarget),
+        ]);
+
+        if (!option) {
+            throw new Error(
+                "DATE_FILTER_OPTION_NOT_FOUND: " + targetLabel,
+            );
+        }
+
+        await option.click();
+        await sleep(1_200);
+    }
+
+    const verifyTrigger = await firstVisible([
+        page.getByRole("button", { name: anyDateLabel }),
+        page
+            .locator("button, [role=button]")
+            .filter({ hasText: anyDateLabel }),
     ]);
 
-    if (!option) return false;
+    const after = cleanText(
+        await verifyTrigger?.innerText().catch(() => ""),
+    );
 
-    await option.click();
-    await sleep(1_000);
+    if (!exactTarget.test(after)) {
+        throw new Error(
+            "DATE_FILTER_NOT_APPLIED: expected " +
+            targetLabel +
+            ", saw \"" +
+            (after || "unknown") +
+            "\"",
+        );
+    }
+
+    console.log("✅ Visible Nextdoor date filter verified: " + targetLabel);
     return true;
 }
 
@@ -1801,15 +1835,29 @@ async function searchNextdoorPosts(page, query) {
     try {
         await applySearchFiltersByUrl(page, query);
     } catch (error) {
-        console.warn(`⚠️ URL filters failed: ${getErrorMessage(error)}`);
-        console.log("♻️ Falling back to visible Posts/filter controls...");
-
-        await goToPostsTab(page, query);
-        await applyMostRecentFilter(page);
-        await applyDistanceFilter(page, getSearchDistance(query));
-        await applyTodayFilter(page);
-        await sleep(1_800);
+        console.warn(
+            "⚠️ URL filter navigation failed: " + getErrorMessage(error),
+        );
     }
+
+    // URL parameters are not proof that Nextdoor actually applied them.
+    // Physically set and verify the visible controls before collecting cards.
+    await goToPostsTab(page, query);
+    await applyMostRecentFilter(page);
+
+    const distanceApplied =
+        await applyDistanceFilter(page, getSearchDistance(query));
+
+    if (!distanceApplied) {
+        throw new Error(
+            "DISTANCE_FILTER_NOT_APPLIED:" +
+            getSearchDistance(query) +
+            " miles",
+        );
+    }
+
+    await applyDateFilter(page, "Today");
+    await sleep(1_800);
 
     const throttle = await detectNextdoorThrottle(page);
 
