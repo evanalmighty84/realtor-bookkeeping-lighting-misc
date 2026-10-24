@@ -1040,6 +1040,77 @@ async function insertUnfilteredRecord(record) {
     return id;
 }
 
+const OTHER_LEAD_TABLE = "unfiltered_general_contracting";
+
+function normalizeDuplicateText(value) {
+    return cleanText(value || "")
+        .toLowerCase()
+        .replace(/[“”"‘’']/g, "")
+        .replace(/[^a-z0-9]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function descriptionsLookLikeSamePost(left, right) {
+    const a = normalizeDuplicateText(left);
+    const b = normalizeDuplicateText(right);
+
+    if (!a || !b) {
+        return false;
+    }
+
+    if (a === b) {
+        return true;
+    }
+
+    const shorter = a.length <= b.length ? a : b;
+    const longer = a.length <= b.length ? b : a;
+
+    if (shorter.length >= 30 && longer.includes(shorter)) {
+        return true;
+    }
+
+    const tokensA = new Set(
+        a.split(" ").filter((token) => token.length >= 3),
+    );
+    const tokensB = new Set(
+        b.split(" ").filter((token) => token.length >= 3),
+    );
+
+    if (!tokensA.size || !tokensB.size) {
+        return false;
+    }
+
+    let overlap = 0;
+
+    for (const token of tokensA) {
+        if (tokensB.has(token)) {
+            overlap += 1;
+        }
+    }
+
+    const smallerTokenCount = Math.min(
+        tokensA.size,
+        tokensB.size,
+    );
+
+    return (
+        smallerTokenCount >= 5 &&
+        overlap / smallerTokenCount >= 0.82
+    );
+}
+
+function authorsCompatibleForDuplicate(left, right) {
+    const a = normalizeDuplicateText(left);
+    const b = normalizeDuplicateText(right);
+
+    if (!a || !b) {
+        return true;
+    }
+
+    return a === b;
+}
+
 async function getExistingUrls(items) {
     const urls = items
         .map((item) => normalizeRecordUrl(item.url || item.post_url))
@@ -1049,14 +1120,91 @@ async function getExistingUrls(items) {
 
     const { rows } = await pool.query(
         `
-            SELECT post_url
+            SELECT
+                post_url,
+                author,
+                description,
+                'current'::text AS source
             FROM ${TABLE_NAME}
+            WHERE post_url = ANY($1::text[])
+
+            UNION ALL
+
+            SELECT
+                post_url,
+                author,
+                description,
+                'other'::text AS source
+            FROM ${OTHER_LEAD_TABLE}
             WHERE post_url = ANY($1::text[])
         `,
         [urls],
     );
 
-    return new Set(rows.map((row) => normalizeRecordUrl(row.post_url)));
+    const itemsByUrl = new Map();
+
+    for (const item of items) {
+        const url = normalizeRecordUrl(item.url || item.post_url);
+
+        if (!itemsByUrl.has(url)) {
+            itemsByUrl.set(url, []);
+        }
+
+        itemsByUrl.get(url).push(item);
+    }
+
+    const existingUrls = new Set();
+    let crossTableMatches = 0;
+    let reusedUrlMismatches = 0;
+
+    for (const row of rows) {
+        const url = normalizeRecordUrl(row.post_url);
+
+        /*
+         * Never let ON CONFLICT(post_url) overwrite a record already in
+         * this specialty table merely because Nextdoor reused/misaligned
+         * the same URL with different content.
+         */
+        if (row.source === "current") {
+            existingUrls.add(url);
+            continue;
+        }
+
+        const candidates = itemsByUrl.get(url) || [];
+
+        const samePost = candidates.some((item) =>
+            authorsCompatibleForDuplicate(
+                row.author,
+                item.author,
+            ) &&
+            descriptionsLookLikeSamePost(
+                row.description,
+                item.preview || item.description,
+            )
+        );
+
+        if (samePost) {
+            existingUrls.add(url);
+            crossTableMatches += 1;
+        } else {
+            reusedUrlMismatches += 1;
+        }
+    }
+
+    if (crossTableMatches > 0) {
+        console.log(
+            `🧱 Cross-table historical duplicate matches: ${crossTableMatches}.`,
+        );
+    }
+
+    if (reusedUrlMismatches > 0) {
+        console.warn(
+            `⚠️ Reused/mismatched Nextdoor URL(s) not treated as duplicates: ` +
+            `${reusedUrlMismatches}.`,
+        );
+    }
+
+    return existingUrls;
 }
 
 async function ensureAuditTables() {
