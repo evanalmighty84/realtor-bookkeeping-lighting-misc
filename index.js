@@ -20,6 +20,13 @@ const CRM_API_BASE_URL =
     process.env.CRM_API_BASE_URL ||
     "http://ftn-enrichment.railway.internal:8080";
 
+const NEXTDOOR_QUEUE_API_BASE_URL =
+    process.env.NEXTDOOR_QUEUE_API_BASE_URL ||
+    process.env.CLUBHOUSE_API_BASE_URL ||
+    "";
+
+const NEXTDOOR_QUEUE_SCRAPER_KEY = "specialty";
+
 const FALLBACK_STATE = process.env.FALLBACK_STATE || "TX";
 
 const STANDARD_DISTANCE_MILES = Math.max(
@@ -289,6 +296,88 @@ function shuffleArray(items) {
     }
 
     return shuffled;
+}
+
+async function fetchCarryoverSearchTerms(scraperKey) {
+    if (!NEXTDOOR_QUEUE_API_BASE_URL) {
+        console.log(
+            "ℹ️ NEXTDOOR_QUEUE_API_BASE_URL/CLUBHOUSE_API_BASE_URL is not configured; " +
+            "continuing without carryover terms.",
+        );
+        return [];
+    }
+
+    const endpointUrl = new URL(
+        `/nextdoor/search-queue/${encodeURIComponent(scraperKey)}`,
+        NEXTDOOR_QUEUE_API_BASE_URL,
+    ).toString();
+
+    try {
+        console.log(
+            `♻️ Loading unfinished Nextdoor search terms → ${endpointUrl}`,
+        );
+
+        const response = await fetch(endpointUrl, {
+            method: "GET",
+            headers: {
+                Accept: "application/json",
+            },
+            signal: AbortSignal.timeout(
+                Math.max(
+                    5_000,
+                    Number(process.env.NEXTDOOR_QUEUE_TIMEOUT_MS || 20_000),
+                ),
+            ),
+        });
+
+        const responseText = await response.text();
+
+        if (!response.ok) {
+            throw new Error(
+                `Queue GET returned HTTP ${response.status}: ` +
+                responseText.slice(0, 500),
+            );
+        }
+
+        const body = responseText ? JSON.parse(responseText) : {};
+        const rawTerms = Array.isArray(body?.pending_terms)
+            ? body.pending_terms
+            : [];
+
+        const terms = [];
+        const seen = new Set();
+
+        for (const entry of rawTerms) {
+            const query = cleanText(
+                typeof entry === "string"
+                    ? entry
+                    : entry?.query || entry?.search_term || "",
+            );
+
+            const key = query.toLowerCase();
+
+            if (!query || seen.has(key)) {
+                continue;
+            }
+
+            seen.add(key);
+            terms.push(query);
+        }
+
+        console.log(
+            `♻️ Loaded ${terms.length} unfinished specialty search term(s).`,
+        );
+
+        return terms;
+    } catch (error) {
+        console.warn(
+            "⚠️ Could not load specialty carryover queue; " +
+            "continuing with the normal randomized plan: " +
+            getErrorMessage(error),
+        );
+
+        return [];
+    }
 }
 
 function parseNextdoorThrottleMessage(text = "") {
@@ -2759,8 +2848,40 @@ async function main() {
     await purgeExpiredSearchHistory();
 
     const standardPlan = buildStandardSearchPlan();
-    const shuffledStandardPlan = shuffleArray(standardPlan);
-    const plannedSearchTerms = shuffledStandardPlan.length + (RUN_REALTOR ? 1 : 0);
+
+    const carryoverTerms =
+        await fetchCarryoverSearchTerms(
+            NEXTDOOR_QUEUE_SCRAPER_KEY,
+        );
+
+    const carryoverKeys = new Set(
+        carryoverTerms.map((term) =>
+            cleanText(term).toLowerCase(),
+        ),
+    );
+
+    const normalTerms = standardPlan.filter(
+        (term) =>
+            !carryoverKeys.has(
+                cleanText(term).toLowerCase(),
+            ),
+    );
+
+    const shuffledCarryoverTerms =
+        shuffleArray(carryoverTerms);
+
+    const shuffledNormalTerms =
+        shuffleArray(normalTerms);
+
+    const shuffledStandardPlan = [
+        ...shuffledCarryoverTerms,
+        ...shuffledNormalTerms,
+    ];
+
+    const plannedSearchTerms =
+        shuffledStandardPlan.length +
+        (RUN_REALTOR ? 1 : 0);
+
     const runId = randomUUID();
 
     const totals = {
@@ -2781,7 +2902,13 @@ async function main() {
     console.log(`🆔 Special search run: ${runId}`);
     console.log(`📌 Planned workflows/terms: ${plannedSearchTerms}`);
     console.log(
-        `🔀 Randomized ${shuffledStandardPlan.length} standard search terms for this run.`,
+        `♻️ Carryover terms prioritized: ${shuffledCarryoverTerms.length}`,
+    );
+    console.log(
+        `🔀 Normal terms randomized after carryover: ${shuffledNormalTerms.length}`,
+    );
+    console.log(
+        `📋 Final specialty execution plan: ${shuffledStandardPlan.length} standard term(s).`,
     );
     console.log(
         "🔀 First 10 standard terms this run:",
